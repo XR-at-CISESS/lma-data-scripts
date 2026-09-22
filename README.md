@@ -3,16 +3,18 @@ Code used/developed while interning at the University of Maryland Earth System S
 
 The goal of this project is to collect and process data of the three Lightning Mapping Array: DCLMA, WFFLMA, and MALMA and to analyze Mid-Atlantic Lightning Mapping Array (MALMA) multi-band network performance. The project uses Python and is partially built upon [lmatools](https://github.com/deeplycloudy/lmatools).
 
-Since `lmatools` is not yet an official pip package, you first need to install it directly from its Git repository. If not, you can skip this step.
+Dependencies are declared in `pyproject.toml` and managed with
+[uv](https://docs.astral.sh/uv/). The `lmatools` dependency is fetched from the
+XR-at-CISESS Git repository automatically.
 
-```
-pip3 install git+https://github.com/XR-at-CISESS/lmatools.git 
+```sh
+uv sync
 ```
 
-Then, you can install `lma_data`:
+Run a command inside the managed environment with `uv run`:
 
-```
-pip3 install git+https://github.com/XR-at-CISESS/lma_data.git
+```sh
+uv run lma_find --help
 ```
 
 ## Commands

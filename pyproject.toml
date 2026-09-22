@@ -1,0 +1,38 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "lma-data"
+version = "1.0.1"
+description = "Scripts to transform and produce plots of LMA data"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "cartopy",
+    "lmatools",
+    "matplotlib",
+    "netcdf4",
+    "numpy",
+    "pandas",
+    "rich",
+    "scikit-learn",
+    "scipy",
+    "shapely",
+    "six",
+    "tables",
+]
+
+[project.scripts]
+lma_download = "lma_scripts.lma_download:main"
+lma_flash = "lma_scripts.lma_flash:main"
+lma_plot = "lma_scripts.lma_plot:main"
+lma_storm = "lma_scripts.lma_storm:main"
+lma_batch = "lma_scripts.lma_batch:main"
+lma_find = "lma_scripts.lma_find:main"
+
+[tool.setuptools.packages.find]
+include = ["lma_data*", "lma_scripts*"]
+
+[tool.uv.sources]
+lmatools = { git = "https://github.com/XR-at-CISESS/lmatools.git" }
