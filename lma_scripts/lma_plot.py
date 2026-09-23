@@ -6,6 +6,8 @@ python lma-plot {network} {year} {month} {day}
 
 import os
 import argparse
+import logging
+from time import perf_counter
 
 import numpy as np
 from datetime import datetime, timedelta
@@ -26,7 +28,9 @@ from lma_data.LMA_util import get_lma_shapes_dir, get_lma_out_dir
 from lma_data.browser.file_browser import FileBrowser
 from lma_data.lmatools_file import LMAToolsFile
 from lma_data.LMA_filters import LMAFilters
-from lma_data.LMA_cli import vprint, set_verbose
+from lma_scripts.log_output import configure_stage_logging
+
+LOG = logging.getLogger("lma_scripts.plot")
 
 GeoAxes._pcolormesh_patched = Axes.pcolormesh
 
@@ -45,7 +49,7 @@ def draw_map(
     **kwargs,
 ):
 
-    vprint("\tGenerate Map...")
+    LOG.debug("Generating map")
     projection = ccrs.PlateCarree()
 
     states_provinces = cfeature.NaturalEarthFeature(
@@ -57,7 +61,7 @@ def draw_map(
 
     # --add features, such as lakes, river, borders, coastlines, etc.
     reader = shpreader.Reader(os.path.join(get_lma_shapes_dir(), "countyl010g.shp"))
-    vprint("\tCreated Reader...")
+    LOG.debug("Loaded county shapes")
 
     counties = list(reader.geometries())
     COUNTIES = cfeature.ShapelyFeature(counties, projection)
@@ -69,7 +73,7 @@ def draw_map(
     ax.add_feature(cfeature.OCEAN, color=plotrgba)
     ax.coastlines(resolution="10m", color=coastrgba)
 
-    vprint("\tAdded Features...")
+    LOG.debug("Added map features")
 
     # -------------- Gather network specific variables  --------------
     lma_info = info(network)
@@ -78,14 +82,14 @@ def draw_map(
     lat_extents = lma_info[5]
     lon_extents = lma_info[6]
 
-    vprint("\tGot Info...")
+    LOG.debug("Loaded network information")
 
     extents = [*lon_extents, *lat_extents]
     ax.set_extent(extents, crs=projection)
-    vprint("\tSet Extent...")
+    LOG.debug("Set map extent")
     ax.set_aspect("auto")
 
-    vprint("\tSet Aspect...")
+    LOG.debug("Set map aspect")
 
     # ------------------- Plot LMA Stations -------------------
     ax.scatter(
@@ -99,7 +103,7 @@ def draw_map(
         zorder=10,
     )
 
-    vprint("\tDone Generate Map...")
+    LOG.debug("Finished map")
 
     return ax
 
@@ -112,7 +116,7 @@ def round_time(dt, round_to=60):
 
 def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20)):
 
-    vprint("\tGet data from 3d.nc file...")
+    LOG.debug("Reading 3D NetCDF grid from %s", file)
     # -------- Import Variables from Gridded NetCDF file ------------
     data = Dataset(file).variables
     lons = data["longitude"][:]
@@ -146,7 +150,7 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20)):
     # start_time = round_time(start_time, round_to=frame_interval)
     start_time = round_time(start_time, round_to=60 * 1)
 
-    vprint("\t\tCalculate summations...")
+    LOG.debug("Calculating source totals and projections")
     # ------------------- Sum TOTAL Source Count -------------------
     total = np.sum(grid_type)
 
@@ -199,7 +203,6 @@ def make_plot(
     theme="normal",
     image_type="png",
 ):
-    print(f"Generating plot for {file}...")
     lma_info = info(network)
     lat_0 = lma_info[0]
     lon_0 = lma_info[1]
@@ -278,7 +281,7 @@ def make_plot(
 
     # ==============================================================
     # ------------- Generate Figure with Subplot Specs -------------
-    vprint("\tCreate Figure...")
+    LOG.debug("Creating figure")
 
     # -------- Calcualte Figure Size from Subplot Aspect Ratios --------
     FA = 0
@@ -676,7 +679,7 @@ def make_plot(
 
     # ===============================================================
     # ----------------------- Save file ------------------------------
-    vprint("\tSave Plot")
+    LOG.debug("Saving plot")
     filepathway = file.split("/")
     filename = filepathway[-1].split(".")
     filename = "".join(filename[:-1])
@@ -689,6 +692,7 @@ def make_plot(
             facecolor=fbgrgba,
             edgecolor=edgergba,
         )
+        LOG.info("Saved image to %s", filename)
     plt.close(fig)
 
 
@@ -740,7 +744,7 @@ def main():
     data_dir = args.data_dir
     outpath = args.out_dir
     verbose = args.verbose
-    set_verbose(verbose)
+    configure_stage_logging(verbose)
 
     os.makedirs(outpath, exist_ok=True)
 
@@ -753,30 +757,57 @@ def main():
 
     # -----------------------------------------------------------
     # -------------- Generate and Save the Plots ----------------
-    vprint("Cycle through 3D gridded files.....")
-
     filepaths = browser.find(data_dir, **vars(args))
-    for file in filepaths:
+    LOG.info(
+        "Found %d gridded NetCDF file(s) in %s; writing images to %s",
+        len(filepaths), data_dir, outpath,
+    )
+    if not filepaths:
+        LOG.info("No gridded files matched the selected filters")
+
+    for index, file in enumerate(filepaths, 1):
+        file_started = perf_counter()
         # ------------ Get Data from Gridded NetCDF Files ------------
         path = file.path
         network = file.prefix
-        data = get_data(
-            path,
-            lon_index=params["lon_index"],
-            lat_index=params["lat_index"],
-            alt_index=params["alt_index"],
+        LOG.info(
+            "Rendering file %d/%d for %s: %s",
+            index, len(filepaths), network, os.path.basename(path),
         )
-        # --------------------- Generate Figure ---------------------
-        make_plot(
-            data,
-            path,
-            grid_name="src_density",
-            network=network,
-            outpath=outpath,
-            do_save=True,
-            theme="norm",
-            image_type="png",
-        )
+        try:
+            data = get_data(
+                path,
+                lon_index=params["lon_index"],
+                lat_index=params["lat_index"],
+                alt_index=params["alt_index"],
+            )
+            LOG.info(
+                "Frame starts %s UTC; interval %d seconds; %s sources in selected grid",
+                data["start_time"].strftime("%Y-%m-%d %H:%M:%S"),
+                data["frame_interval"], data["total"],
+            )
+            if not np.ma.is_masked(data["total"]) and data["total"] == 0:
+                LOG.warning("Selected grid has no sources; the image may be empty")
+            # --------------------- Generate Figure ---------------------
+            make_plot(
+                data,
+                path,
+                grid_name="src_density",
+                network=network,
+                outpath=outpath,
+                do_save=True,
+                theme="norm",
+                image_type="png",
+            )
+            LOG.info(
+                "Finished image %d/%d in %.1f s",
+                index, len(filepaths), perf_counter() - file_started,
+            )
+        except Exception:
+            LOG.exception("Failed to render %s", path)
+            raise
+    if filepaths:
+        LOG.info("Completed %d image(s) in %s", len(filepaths), outpath)
 
 
 if __name__ == "__main__":

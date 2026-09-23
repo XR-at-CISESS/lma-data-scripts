@@ -14,6 +14,7 @@ days: XX (multiple days separated by spaces)
 import sys, os, glob, pathlib, argparse
 from datetime import datetime, timedelta
 import subprocess
+from time import perf_counter
 
 from lmatools.io.LMA import LMADataset
 from lmatools.flashsort.gen_autorun import logger_setup, sort_files
@@ -24,6 +25,11 @@ from lma_data.lma_analysis_data_file import LMAAnalysisDataFile
 from lma_data.lmatools_file import LMAToolsFile
 from lma_data.browser.filters.non_empty import NonEmptyFileFilter
 from lma_data.LMA_util import batch
+from lma_scripts.log_output import (
+    configure_stage_logging,
+    filter_library_logger,
+    readable_library_output,
+)
 
 from lmatools.grid.make_grids import (
     grid_h5flashfiles,
@@ -36,6 +42,8 @@ from six.moves import map
 import logging, logging.handlers
 
 from lma_data.LMA_info import info
+
+LOG = logging.getLogger("lma_scripts.grid")
 
 
 def tfromfile(name):
@@ -60,8 +68,18 @@ def sort_flashes(files, outdir, params):
           }
 
     """
+    LOG.info("Sorting %d analyzed file(s) into flashes", len(files))
     # -------------------- Setup Log File -----------------------
     logger_setup(outdir)
+    filter_library_logger()
+    LOG.info(
+        "Flash filters: %d-%d stations, chi-squared %g-%g, "
+        "maximum source separation %g m, minimum %s sources per flash",
+        *params["stations"],
+        *params["chi2"],
+        params["distance"],
+        params.get("min_points", "default"),
+    )
 
     # ----------- Write 'param' settings to file ----------------
     info = open(os.path.join(outdir, "input_params.py"), "w")
@@ -86,8 +104,9 @@ def sort_flashes(files, outdir, params):
         logger.info(now)
 
         h5_outfiles = []
-        for a_file in files:
-            print(f"Processing {a_file}...")
+        for index, a_file in enumerate(files, 1):
+            file_started = perf_counter()
+            LOG.info("Sorting file %d/%d: %s", index, len(files), os.path.basename(a_file))
             try:
                 # ---------- create filename with .flash extention ----------
                 file_base_name = os.path.split(a_file)[-1].replace(".gz", "")
@@ -97,14 +116,31 @@ def sort_flashes(files, outdir, params):
                 # *********** Create LMADataset and Cluster Data ************
                 # lmadata = LMADataset(a_file,file_mask_length=params['mask_length']) (mask length param doesn't exist anymore)
                 lmadata = LMADataset(a_file)
-                clusterer(lmadata)
+                with readable_library_output(LOG):
+                    clusterer(lmadata)
+                try:
+                    flashes = lmadata.flashes
+                    retained_sources = sum(flash.pointCount for flash in flashes)
+                except (AttributeError, TypeError):
+                    LOG.debug("Flash source counts are unavailable", exc_info=True)
+                else:
+                    LOG.info(
+                        "Retained %d sources in %d flashes from %s",
+                        retained_sources, len(flashes), os.path.basename(a_file),
+                    )
 
                 # ----------- create filename with .h5 extention ------------
                 outfile_with_extension = outfile + ".h5"
                 h5_outfiles.append(outfile_with_extension)
 
-                lmadata.write_h5_output(outfile_with_extension, a_file)
+                with readable_library_output(LOG):
+                    lmadata.write_h5_output(outfile_with_extension, a_file)
+                LOG.info(
+                    "Saved flash data to %s (%.1f s)",
+                    outfile_with_extension, perf_counter() - file_started,
+                )
             except:
+                LOG.exception("Failed while sorting %s", a_file)
                 logger.error(
                     "Did not successfully sort %s \n Error was: %s"
                     % (a_file, sys.exc_info()[1])
@@ -123,6 +159,7 @@ def sort_flashes(files, outdir, params):
     # ------------- List HDF5 files that were created ------------
     h5_filenames = glob.glob(os.path.join(outdir, "*.dat.flash.h5"))
     h5_filenames.sort()
+    LOG.info("%d flash file(s) ready for gridding", len(h5_filenames))
     return h5_filenames
 
 
@@ -153,6 +190,22 @@ def grid(
     Grids and plots are written to base_sort_dir/grid_files/ and  base_sort_dir/plots/
     base_date is used to optionally set a common reference time for each of the NetCDF grids.
     """
+    if not h5_filenames:
+        LOG.info("No flash files to grid")
+    LOG.info(
+        "Creating %d time frame(s) for %s at %g-second intervals; output: %s",
+        len(h5_filenames), center_ID, frame_interval, outpath,
+    )
+    LOG.info(
+        "Grid area: center lat %.4f°, lon %.4f°; %.0f × %.0f m horizontal cells; "
+        "east/west %.0f to %.0f km, north/south %.0f to %.0f km, "
+        "altitude %.0f to %.0f km; minimum %d sources per flash",
+        ctr_lat, ctr_lon, dx, dy,
+        x_bnd[0] / 1000, x_bnd[1] / 1000,
+        y_bnd[0] / 1000, y_bnd[1] / 1000,
+        z_bnd[0] / 1000, z_bnd[1] / 1000,
+        min_points,
+    )
     # not really in km, just a different name to distinguish from similar variables below.
     dx_km = dx
     dy_km = dy
@@ -165,33 +218,61 @@ def grid(
         ctr_lat, ctr_lon, dx=dx_km, dy=dy_km, x_bnd=x_bnd_km, y_bnd=y_bnd_km
     )
 
-    for f in h5_filenames:
+    for index, f in enumerate(h5_filenames, 1):
+        frame_started = perf_counter()
         y, m, d, H, M, S = tfromfile(f)
         start_time = datetime(y, m, d, H, M, S)
         end_time = start_time + timedelta(0, frame_interval)
-        if True:
-            grid_h5flashfiles(
-                h5_filenames,
-                start_time,
-                end_time,
-                min_points_per_flash=min_points,
-                frame_interval=frame_interval,
-                proj_name="latlong",
-                base_date=base_date,
-                energy_grids="",
-                dx=dx,
-                dy=dy,
-                x_bnd=x_bnd,
-                y_bnd=y_bnd,
-                z_bnd=z_bnd_km,
-                ctr_lon=ctr_lon,
-                ctr_lat=ctr_lat,
-                outpath=outpath,
-                output_writer=write_cf_netcdf_latlon,
-                output_writer_3d=write_cf_netcdf_3d_latlon,
-                output_filename_prefix=center_ID,
-                spatial_scale_factor=1.0,
+        LOG.info(
+            "Frame %d/%d covers %s to %s UTC",
+            index, len(h5_filenames),
+            start_time.strftime("%Y-%m-%d %H:%M:%S"),
+            end_time.strftime("%Y-%m-%d %H:%M:%S"),
+        )
+        try:
+            with readable_library_output(LOG):
+                grid_h5flashfiles(
+                    h5_filenames,
+                    start_time,
+                    end_time,
+                    min_points_per_flash=min_points,
+                    frame_interval=frame_interval,
+                    proj_name="latlong",
+                    base_date=base_date,
+                    energy_grids="",
+                    dx=dx,
+                    dy=dy,
+                    x_bnd=x_bnd,
+                    y_bnd=y_bnd,
+                    z_bnd=z_bnd_km,
+                    ctr_lon=ctr_lon,
+                    ctr_lat=ctr_lat,
+                    outpath=outpath,
+                    output_writer=write_cf_netcdf_latlon,
+                    output_writer_3d=write_cf_netcdf_3d_latlon,
+                    output_filename_prefix=center_ID,
+                    spatial_scale_factor=1.0,
+                )
+        except Exception:
+            LOG.exception(
+                "Failed to create frame %d/%d from %s",
+                index, len(h5_filenames), os.path.basename(f),
             )
+            raise
+        output_files = sorted(
+            path
+            for path in glob.glob(
+                os.path.join(outpath, f"{center_ID}_{start_time:%Y%m%d_%H%M%S}_*.nc")
+            )
+            if os.path.isfile(path)
+        )
+        LOG.info(
+            "Finished frame %d/%d: %d NetCDF file(s) present in %.1f s",
+            index, len(h5_filenames), len(output_files), perf_counter() - frame_started,
+        )
+        for output_file in output_files:
+            LOG.info("NetCDF output: %s", output_file)
+    LOG.info("Completed NetCDF grids in %s", outpath)
 
 
 # ===========================================================
@@ -233,6 +314,7 @@ def main():
     filters = [date_filter, network_filter, non_empty_filter, cache_filter]
     LMAFilters.apply_filters_to_argparser(parser, *filters)
     args = parser.parse_args()
+    configure_stage_logging()
 
     data_dir: str = args.data_dir
     out_dir: str = args.out_dir
@@ -243,10 +325,15 @@ def main():
     browser = FileBrowser(LMAAnalysisDataFile.try_parse, "**/*.gz")
     LMAFilters.add_filters_to_browser(browser, *filters)
     files = browser.find(data_dir, **vars(args))
+    LOG.info(
+        "Found %d analyzed file(s) in %s; writing results to %s",
+        len(files), data_dir, out_dir,
+    )
     network_batches = batch(files, lambda f: f.network)
 
     for network_batch in network_batches:
         network = network_batch[0].network
+        LOG.info("Processing %s (%d input file(s))", network, len(network_batch))
         lma_info = info(network)
         params = {
             "stations": (6, 99),  # range of allowable numbers of contributing stations
