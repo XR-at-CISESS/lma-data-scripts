@@ -30,6 +30,7 @@ from lma_scripts.log_output import (
     filter_library_logger,
     readable_library_output,
 )
+from lma_scripts.grid_coordinates import scalar_grid_coordinates
 
 from lmatools.grid.make_grids import (
     grid_h5flashfiles,
@@ -217,6 +218,7 @@ def grid(
     dx, dy, x_bnd, y_bnd = dlonlat_at_grid_center(
         ctr_lat, ctr_lon, dx=dx_km, dy=dy_km, x_bnd=x_bnd_km, y_bnd=y_bnd_km
     )
+    dx, dy, x_bnd, y_bnd = scalar_grid_coordinates(dx, dy, x_bnd, y_bnd)
 
     for index, f in enumerate(h5_filenames, 1):
         frame_started = perf_counter()

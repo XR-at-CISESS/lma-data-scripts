@@ -2,9 +2,12 @@ import io
 import logging
 import tempfile
 import unittest
+import warnings
 from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
+
+import numpy as np
 
 from lma_scripts import lma_flash, lma_plot
 from lma_scripts.log_output import LibraryDiagnosticFilter, readable_library_output
@@ -82,6 +85,27 @@ class StageLoggingTests(unittest.TestCase):
         self.assertIn("2 NetCDF file(s) present", output)
         self.assertIn("NetCDF output: /tmp/grids/MALMA_20250615_200000_600_10src_0.01deg-dx_source_3d.nc", output)
         self.assertNotIn("(12,) (6,)", output)
+
+    def test_grid_passes_scalar_coordinates_to_lmatools(self):
+        with (
+            warnings.catch_warnings(),
+            patch.object(lma_flash, "grid_h5flashfiles") as make_grid,
+            patch.object(lma_flash.glob, "glob", return_value=[]),
+        ):
+            warnings.simplefilter("ignore", FutureWarning)
+            lma_flash.grid(
+                ["MALMA_250615_200000_0600.dat.flash.h5"],
+                "/tmp/grids",
+            )
+
+        kwargs = make_grid.call_args.kwargs
+        for axis, bounds in (("dx", "x_bnd"), ("dy", "y_bnd")):
+            self.assertIsInstance(kwargs[axis], float)
+            self.assertTrue(all(isinstance(value, float) for value in kwargs[bounds]))
+            self.assertGreater(
+                len(np.arange(kwargs[bounds][0], kwargs[bounds][1] + kwargs[axis], kwargs[axis])),
+                1,
+            )
 
     def test_plot_logs_input_summary_and_completion(self):
         with tempfile.TemporaryDirectory() as directory:

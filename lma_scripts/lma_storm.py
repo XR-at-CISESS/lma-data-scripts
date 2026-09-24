@@ -29,6 +29,7 @@ from lmatools.grid.make_grids import (
 )
 from six.moves import map
 from lma_data.LMA_util import get_lma_data_dir, get_lma_out_dir
+from lma_scripts.grid_coordinates import scalar_grid_coordinates
 
 import logging, logging.handlers
 
@@ -187,6 +188,7 @@ def grid(
     dx, dy, x_bnd, y_bnd = dlonlat_at_grid_center(
         ctr_lat, ctr_lon, dx=dx_km, dy=dy_km, x_bnd=x_bnd_km, y_bnd=y_bnd_km
     )
+    dx, dy, x_bnd, y_bnd = scalar_grid_coordinates(dx, dy, x_bnd, y_bnd)
 
     for f in h5_filenames:
         y, m, d, H, M, S = tfromfile(f)
