@@ -23,9 +23,9 @@ Once you install `lma_data`, several commands for processing LMA data will becom
 
 - `lma_batch`: Enables the simultaneous processing of several LMA data files at once. 
 - `lma_plot INPUT_DIR OUTPUT_DIR --time-altitude`: Adds a time-versus-altitude
-  source-count panel above each plot. The option is off by default. Run the
-  current `lma_flash` first so the 3D NetCDF grids contain the required
-  per-second source counts; older grids need to be regenerated.
+  source-count panel above each plot. The option is off by default. New 3D
+  NetCDF grids include per-second counts. For older grids, Plot can calculate
+  those counts from the companion `*.dat.flash.h5` file in the same directory.
 
 ## Files
 

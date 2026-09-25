@@ -7,6 +7,8 @@ python lma-plot {network} {year} {month} {day}
 import os
 import argparse
 import logging
+import glob
+import re
 from time import perf_counter
 
 import numpy as np
@@ -30,6 +32,7 @@ from lma_data.browser.file_browser import FileBrowser
 from lma_data.lmatools_file import LMAToolsFile
 from lma_data.LMA_filters import LMAFilters
 from lma_scripts.log_output import configure_stage_logging
+from lma_scripts.time_altitude import compute_time_altitude_counts
 
 LOG = logging.getLogger("lma_scripts.plot")
 
@@ -122,6 +125,30 @@ def round_time(dt, round_to=60):
     return dt + timedelta(0, rounding - seconds, -dt.microsecond)
 
 
+def _axis_extent(coordinates, weights, minimum_span):
+    """Frame nearly all sources while keeping isolated outliers from setting the scale."""
+    values = np.asarray(coordinates)
+    totals = np.asarray(np.ma.filled(weights, 0), dtype=float)
+    if totals.sum() <= 0:
+        return float(values[0]), float(values[-1])
+    cumulative = np.cumsum(totals)
+    low = values[np.searchsorted(cumulative, cumulative[-1] * 0.005)]
+    high = values[np.searchsorted(cumulative, cumulative[-1] * 0.995)]
+    span = max(float(high - low) * 1.2, minimum_span)
+    center = float(low + high) / 2
+    lower = max(float(values[0]), center - span / 2)
+    upper = min(float(values[-1]), center + span / 2)
+    return lower, upper
+
+
+def _distance_ticks(bounds, origin, km_per_degree):
+    low, high = (value - origin for value in bounds)
+    locator = mticker.MaxNLocator(nbins=5, steps=[1, 2, 2.5, 5, 10])
+    distances = locator.tick_values(low * km_per_degree, high * km_per_degree)
+    distances = distances[(distances >= low * km_per_degree) & (distances <= high * km_per_degree)]
+    return origin + distances / km_per_degree, [f"{value:g}" for value in distances]
+
+
 def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), time_altitude=False):
 
     LOG.debug("Reading 3D NetCDF grid from %s", file)
@@ -129,17 +156,16 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
     data = Dataset(file).variables
     lons = data["longitude"][:]
     lats = data["latitude"][:]
+    grid_center_lon = float((lons[0] + lons[-1]) / 2)
+    grid_center_lat = float((lats[0] + lats[-1]) / 2)
     grid_type = data["lma_source"][0, :, :, :]
     grid_units = data["lma_source"].units
     time = data["time"][:]
     time_units = data["time"].units
     alts = data["altitude"][:]
+    full_alts = alts
     time_altitude_count = None
-    if time_altitude:
-        if "time_altitude_count" not in data:
-            raise ValueError(
-                f"{file} has no time-altitude data; regenerate its grid with the current lma_flash"
-            )
+    if time_altitude and "time_altitude_count" in data:
         time_altitude_count = data["time_altitude_count"][:, alt_index[0] : alt_index[1]]
 
     # ------------ Index Data in Region of Interest ------------
@@ -168,6 +194,35 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
     LOG.debug("Calculating source totals and projections")
     # ------------------- Sum TOTAL Source Count -------------------
     total = np.sum(grid_type)
+    if time_altitude and (
+        time_altitude_count is None or (total > 0 and np.sum(time_altitude_count) == 0)
+    ):
+        flash_files = glob.glob(os.path.join(os.path.dirname(file), "*.dat.flash.h5"))
+        matching_flash_files = [
+            path for path in flash_files
+            if os.path.basename(path).startswith(
+                f"{fname.split('_')[0]}_{start_time:%y%m%d_%H%M%S}_"
+            )
+        ]
+        if len(matching_flash_files) != 1 and len(flash_files) == 1:
+            matching_flash_files = flash_files
+        minimum_points = re.search(r"_(\d+)src_", fname)
+        if len(matching_flash_files) == 1 and minimum_points:
+            LOG.info("Computing time-altitude counts from companion %s", matching_flash_files[0])
+            time_altitude_count = compute_time_altitude_counts(
+                full_alts,
+                matching_flash_files[0],
+                start_time,
+                frame_interval,
+                int(minimum_points.group(1)),
+            )[:, alt_index[0] : alt_index[1]]
+        elif total > 0:
+            raise ValueError(
+                f"{file} has no usable time-altitude counts or unique companion "
+                "flash HDF5 file; regenerate its grid with the corrected lma_flash"
+            )
+        else:
+            time_altitude_count = np.zeros((frame_interval, len(alts)), dtype=int)
 
     # ---------- Create lat/lon mesh -------------
     mesh_lon, mesh_lat = np.meshgrid(lons, lats)
@@ -189,6 +244,10 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
     lmalon = np.ma.masked_where(lmalon <= 0, lmalon)
     lmalat = np.ma.masked_where(lmalat <= 0, lmalat)
     lmalonlat = np.ma.masked_where(lmalonlat <= 0, lmalonlat)
+    focus_extent = (
+        *_axis_extent(lons, np.sum(grid_type, axis=(1, 2)), 1.8),
+        *_axis_extent(lats, np.sum(grid_type, axis=(0, 2)), 1.35),
+    )
 
     DATA = dict(
         mesh_lon=mesh_lon,
@@ -204,6 +263,9 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
         start_time=start_time,
         frame_interval=frame_interval,
         time_altitude_count=time_altitude_count,
+        focus_extent=focus_extent,
+        grid_center_lon=grid_center_lon,
+        grid_center_lat=grid_center_lat,
     )
 
     return DATA
@@ -331,7 +393,7 @@ def make_plot(
         bottom=0.1,
         top=0.9,
         wspace=0,
-        hspace=0.12 if time_altitude else 0,
+        hspace=0.3 if time_altitude else 0,
     )
 
     # ===============================================================
@@ -505,7 +567,14 @@ def make_plot(
             data["start_time"] + timedelta(seconds=data["frame_interval"]),
         )
         altitude_time_ax.set_ylim(0, 20)
-        altitude_time_ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+        tick_times = [
+            data["start_time"] + timedelta(seconds=data["frame_interval"] * fraction)
+            for fraction in (0, 0.5, 1)
+        ]
+        altitude_time_ax.set_xticks(tick_times)
+        altitude_time_ax.xaxis.set_major_formatter(
+            mdates.DateFormatter("%H:%M" if data["frame_interval"] >= 120 else "%H:%M:%S")
+        )
         altitude_time_ax.set_ylabel("Alt (km)", color=textrgba)
         time_colorbar = fig.colorbar(
             time_scatter, ax=altitude_time_ax, orientation="vertical",
@@ -626,16 +695,20 @@ def make_plot(
         right=False,
     )
 
-    # Place tick marks every 100 kilometers
-    # ticklabels = np.arange(-400,500,100)
-    ticklabels = ["", "-300", "-200", "-100", "0", "100", "200", "300", ""]
-    ticklocationx = np.linspace(*lon_extents, num=9)
-    ticklocationy = np.linspace(*lat_extents, num=9)
-
+    focus_extent = data.get("focus_extent", (*lon_extents, *lat_extents))
+    ax0.set_extent(focus_extent, crs=ccrs.PlateCarree())
+    center_lon = data.get("grid_center_lon", lon_0)
+    center_lat = data.get("grid_center_lat", lat_0)
+    ticklocationx, ticklabels_x = _distance_ticks(
+        focus_extent[:2], center_lon, 111.32 * np.cos(np.deg2rad(center_lat))
+    )
+    ticklocationy, ticklabels_y = _distance_ticks(
+        focus_extent[2:], center_lat, 111.32
+    )
     ax0.set_xticks(ticklocationx)
     ax0.set_yticks(ticklocationy)
-    ax0.set_xticklabels(ticklabels)
-    ax0.set_yticklabels(ticklabels)
+    ax0.set_xticklabels(ticklabels_x)
+    ax0.set_yticklabels(ticklabels_y)
 
     # Remove tick labels from cross section shared axis
     ax3.set_xticks([])
