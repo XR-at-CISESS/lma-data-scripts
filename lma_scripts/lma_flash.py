@@ -15,6 +15,9 @@ import sys, os, glob, pathlib, argparse
 from datetime import datetime, timedelta
 import subprocess
 from time import perf_counter
+import numpy as np
+import tables
+from netCDF4 import Dataset
 
 from lmatools.io.LMA import LMADataset
 from lmatools.flashsort.gen_autorun import logger_setup, sort_files
@@ -45,6 +48,56 @@ import logging, logging.handlers
 from lma_data.LMA_info import info
 
 LOG = logging.getLogger("lma_scripts.grid")
+
+
+def add_time_altitude_counts(grid_path, flash_path, start_time, frame_interval, min_points):
+    """Store one-second source counts by altitude in the 3D grid product."""
+    with Dataset(grid_path, "r+") as grid, tables.open_file(flash_path) as flashes:
+        altitudes = np.asarray(grid.variables["altitude"][:], dtype=float)
+        if len(altitudes) < 2:
+            return
+        altitude_edges = np.concatenate((
+            [altitudes[0] - (altitudes[1] - altitudes[0]) / 2],
+            (altitudes[:-1] + altitudes[1:]) / 2,
+            [altitudes[-1] + (altitudes[-1] - altitudes[-2]) / 2],
+        )) / 1000
+        seconds = int(np.ceil(frame_interval))
+        counts = np.zeros((seconds, len(altitudes)), dtype=np.int32)
+        day_start = start_time.replace(hour=0, minute=0, second=0, microsecond=0)
+        frame_start = (start_time - day_start).total_seconds()
+        for name, event_table in flashes.root.events._v_children.items():
+            flash_table = flashes.root.flashes._v_children[name]
+            retained = flash_table.read_where(
+                f"n_points >= {min_points}", field="flash_id"
+            )
+            if len(retained) == 0:
+                continue
+            table_start = datetime(*event_table.attrs.start_time)
+            day_offset = (table_start.replace(hour=0, minute=0, second=0) - day_start).total_seconds()
+            for offset in range(0, event_table.nrows, 100_000):
+                events = event_table.read(offset, min(offset + 100_000, event_table.nrows))
+                selected = np.isin(events["flash_id"], retained)
+                second = np.floor(day_offset + events["time"][selected] - frame_start).astype(int)
+                altitude = np.searchsorted(
+                    altitude_edges, events["alt"][selected], side="right"
+                ) - 1
+                valid = (
+                    (second >= 0) & (second < seconds)
+                    & (altitude >= 0) & (altitude < len(altitudes))
+                )
+                np.add.at(counts, (second[valid], altitude[valid]), 1)
+        if "time_altitude_second" not in grid.dimensions:
+            grid.createDimension("time_altitude_second", seconds)
+        variable = grid.variables.get("time_altitude_count")
+        if variable is None:
+            variable = grid.createVariable(
+                "time_altitude_count", "i4",
+                ("time_altitude_second", grid.variables["altitude"].dimensions[0]),
+                zlib=True,
+            )
+        variable.long_name = "Retained source count by second and altitude"
+        variable.units = "sources"
+        variable[:, :] = counts
 
 
 def tfromfile(name):
@@ -268,6 +321,11 @@ def grid(
             )
             if os.path.isfile(path)
         )
+        for output_file in output_files:
+            if output_file.endswith("_source_3d.nc"):
+                add_time_altitude_counts(
+                    output_file, f, start_time, frame_interval, min_points,
+                )
         LOG.info(
             "Finished frame %d/%d: %d NetCDF file(s) present in %.1f s",
             index, len(h5_filenames), len(output_files), perf_counter() - frame_started,

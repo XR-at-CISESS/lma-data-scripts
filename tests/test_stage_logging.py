@@ -64,6 +64,7 @@ class StageLoggingTests(unittest.TestCase):
                 ],
             ),
             patch.object(lma_flash.os.path, "isfile", return_value=True),
+            patch.object(lma_flash, "add_time_altitude_counts"),
         ):
             def produce_files(*args, **kwargs):
                 print("(12,) (6,)")

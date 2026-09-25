@@ -16,6 +16,7 @@ from netCDF4 import Dataset
 import matplotlib as mpl
 import matplotlib.pyplot as plt
 import matplotlib.ticker as mticker
+import matplotlib.dates as mdates
 from matplotlib.axes import Axes
 from matplotlib import gridspec, colors
 import cartopy.crs as ccrs
@@ -121,7 +122,7 @@ def round_time(dt, round_to=60):
     return dt + timedelta(0, rounding - seconds, -dt.microsecond)
 
 
-def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20)):
+def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), time_altitude=False):
 
     LOG.debug("Reading 3D NetCDF grid from %s", file)
     # -------- Import Variables from Gridded NetCDF file ------------
@@ -133,6 +134,13 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20)):
     time = data["time"][:]
     time_units = data["time"].units
     alts = data["altitude"][:]
+    time_altitude_count = None
+    if time_altitude:
+        if "time_altitude_count" not in data:
+            raise ValueError(
+                f"{file} has no time-altitude data; regenerate its grid with the current lma_flash"
+            )
+        time_altitude_count = data["time_altitude_count"][:, alt_index[0] : alt_index[1]]
 
     # ------------ Index Data in Region of Interest ------------
     if len(alt_index) > 0:
@@ -195,6 +203,7 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20)):
         grid_type=grid_type,
         start_time=start_time,
         frame_interval=frame_interval,
+        time_altitude_count=time_altitude_count,
     )
 
     return DATA
@@ -209,6 +218,7 @@ def make_plot(
     do_save=True,
     theme="normal",
     image_type="png",
+    time_altitude=False,
 ):
     lma_info = info(network)
     lat_0 = lma_info[0]
@@ -291,7 +301,7 @@ def make_plot(
     LOG.debug("Creating figure")
 
     # -------- Calcualte Figure Size from Subplot Aspect Ratios --------
-    FA = 0
+    FA = 1.2 if time_altitude else 0
     F0 = 4.5  # main panel is F0 times the size of the cross section panel
     F1 = 0.25  # cbar panel is F1 times the size of the cross section panel
     F2 = 0.6  # Gap above cbar is F2 times the size of the cross section panel
@@ -302,7 +312,7 @@ def make_plot(
     mpl.pyplot.rc("axes", linewidth=1, edgecolor=edgergba)  # assign axes edge colors
 
     fig = plt.figure(
-        figsize=(fwin, fwin * (1 + F0 + F2 + F1) / (1 + F0)),
+        figsize=(fwin, fwin * (FA + 1 + F0 + F2 + F1) / (1 + F0)),
         dpi=dpi,
         facecolor=fbgrgba,
         edgecolor=borderrgba,
@@ -321,7 +331,7 @@ def make_plot(
         bottom=0.1,
         top=0.9,
         wspace=0,
-        hspace=0,
+        hspace=0.12 if time_altitude else 0,
     )
 
     # ===============================================================
@@ -470,8 +480,41 @@ def make_plot(
     # ===============================================================
     # ------------------- Add Altitude/Time -------------------------
 
-    # altitude_time_ax = fig.add_subplot(gs[0, :])
-    # print(data.keys())
+    if time_altitude:
+        counts = data["time_altitude_count"]
+        if counts is None:
+            raise ValueError("Time-altitude counts were not loaded")
+        altitude_time_ax = fig.add_subplot(gs[0, :], facecolor=plotrgba)
+        seconds, altitude_bins = np.nonzero(counts > 0)
+        timestamps = [
+            data["start_time"] + timedelta(seconds=int(second) + 0.5)
+            for second in seconds
+        ]
+        time_scatter = altitude_time_ax.scatter(
+            timestamps,
+            data["alts"][altitude_bins] / 1e3,
+            c=counts[seconds, altitude_bins],
+            s=3,
+            marker="s",
+            cmap=cmap,
+            norm=norm,
+            linewidths=0,
+        )
+        altitude_time_ax.set_xlim(
+            data["start_time"],
+            data["start_time"] + timedelta(seconds=data["frame_interval"]),
+        )
+        altitude_time_ax.set_ylim(0, 20)
+        altitude_time_ax.xaxis.set_major_formatter(mdates.DateFormatter("%H:%M:%S"))
+        altitude_time_ax.set_ylabel("Alt (km)", color=textrgba)
+        time_colorbar = fig.colorbar(
+            time_scatter, ax=altitude_time_ax, orientation="vertical",
+            pad=0.01, fraction=0.025,
+        )
+        time_colorbar.set_label("Sources / second / altitude bin", color=textrgba)
+        time_colorbar.ax.tick_params(labelsize=7, labelcolor=textrgba)
+        altitude_time_ax.grid(color=gridrgba, linewidth=1)
+        altitude_time_ax.tick_params(labelsize=8, labelcolor=textrgba, color=edgergba)
 
     # ===============================================================
     # ------------------- Add/Format Colorbar -----------------------
@@ -714,6 +757,10 @@ def create_parser():
     parser.add_argument("data_dir")
     parser.add_argument("out_dir")
     parser.add_argument("--verbose", action="store_true")
+    parser.add_argument(
+        "--time-altitude", action="store_true",
+        help="show source counts by time and altitude above the map",
+    )
 
     return parser
 
@@ -784,6 +831,7 @@ def main():
                 lon_index=params["lon_index"],
                 lat_index=params["lat_index"],
                 alt_index=params["alt_index"],
+                time_altitude=args.time_altitude,
             )
             LOG.info(
                 "Frame starts %s UTC; interval %d seconds; %s sources in selected grid",
@@ -802,6 +850,7 @@ def main():
                 do_save=True,
                 theme="norm",
                 image_type="png",
+                time_altitude=args.time_altitude,
             )
             LOG.info(
                 "Finished image %d/%d in %.1f s",
