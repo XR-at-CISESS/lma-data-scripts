@@ -573,7 +573,7 @@ def make_plot(
             timestamps,
             data["time_altitude_alts"][altitude_bins] / 1e3,
             c=counts[seconds, altitude_bins],
-            s=0.25,
+            s=1.0,
             marker="o",
             cmap=cmap,
             norm=count_norm,
