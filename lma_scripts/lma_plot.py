@@ -125,20 +125,17 @@ def round_time(dt, round_to=60):
     return dt + timedelta(0, rounding - seconds, -dt.microsecond)
 
 
-def _axis_extent(coordinates, weights, minimum_span):
-    """Frame nearly all sources while keeping isolated outliers from setting the scale."""
-    values = np.asarray(coordinates)
-    totals = np.asarray(np.ma.filled(weights, 0), dtype=float)
-    if totals.sum() <= 0:
-        return float(values[0]), float(values[-1])
-    cumulative = np.cumsum(totals)
-    low = values[np.searchsorted(cumulative, cumulative[-1] * 0.005)]
-    high = values[np.searchsorted(cumulative, cumulative[-1] * 0.995)]
-    span = max(float(high - low) * 1.2, minimum_span)
-    center = float(low + high) / 2
-    lower = max(float(values[0]), center - span / 2)
-    upper = min(float(values[-1]), center + span / 2)
-    return lower, upper
+def _map_extent(center_lon, center_lat, panel_aspect):
+    """Keep east-west distance at +/-400 km and fit north-south to the panel."""
+    half_width_km = 400
+    half_height_km = half_width_km * panel_aspect
+    longitude_scale = 111.32 * np.cos(np.deg2rad(center_lat))
+    return (
+        center_lon - half_width_km / longitude_scale,
+        center_lon + half_width_km / longitude_scale,
+        center_lat - half_height_km / 111.32,
+        center_lat + half_height_km / 111.32,
+    )
 
 
 def _distance_ticks(bounds, origin, km_per_degree):
@@ -265,11 +262,6 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
     lmalon = np.ma.masked_where(lmalon <= 0, lmalon)
     lmalat = np.ma.masked_where(lmalat <= 0, lmalat)
     lmalonlat = np.ma.masked_where(lmalonlat <= 0, lmalonlat)
-    focus_extent = (
-        *_axis_extent(lons, np.sum(grid_type, axis=(1, 2)), 1.8),
-        *_axis_extent(lats, np.sum(grid_type, axis=(0, 2)), 1.35),
-    )
-
     DATA = dict(
         mesh_lon=mesh_lon,
         mesh_lat=mesh_lat,
@@ -285,7 +277,6 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
         frame_interval=frame_interval,
         time_altitude_count=time_altitude_count,
         time_altitude_alts=time_altitude_alts,
-        focus_extent=focus_extent,
         grid_center_lon=grid_center_lon,
         grid_center_lat=grid_center_lat,
     )
@@ -307,8 +298,6 @@ def make_plot(
     lma_info = info(network)
     lat_0 = lma_info[0]
     lon_0 = lma_info[1]
-    lat_extents = lma_info[5]
-    lon_extents = lma_info[6]
 
     # --------------------- Setup ColorMap --------------------------
     vmin = data["grid_type"][:].min()
@@ -402,7 +391,6 @@ def make_plot(
         edgecolor=borderrgba,
         linewidth=2,
         frameon=True,
-        tight_layout=True,
     )
 
     gs = fig.add_gridspec(
@@ -586,7 +574,7 @@ def make_plot(
             data["time_altitude_alts"][altitude_bins] / 1e3,
             c=counts[seconds, altitude_bins],
             s=0.25,
-            marker="s",
+            marker="o",
             cmap=cmap,
             norm=count_norm,
             linewidths=0,
@@ -619,7 +607,6 @@ def make_plot(
         top_ticks = [value for value in (1, 5, 20, 50, 100, 200) if value <= count_norm.vmax]
         time_colorbar.set_ticks(top_ticks, labels=[str(value) for value in top_ticks])
         time_colorbar.ax.tick_params(labelsize=7, labelcolor=textrgba)
-        altitude_time_ax.grid(color=gridrgba, linewidth=1)
         altitude_time_ax.tick_params(labelsize=8, labelcolor=textrgba, color=edgergba)
 
     # ===============================================================
@@ -732,15 +719,22 @@ def make_plot(
         right=False,
     )
 
-    focus_extent = data.get("focus_extent", (*lon_extents, *lat_extents))
-    ax0.set_extent(focus_extent, crs=ccrs.PlateCarree())
     center_lon = data.get("grid_center_lon", lon_0)
     center_lat = data.get("grid_center_lat", lat_0)
-    ticklocationx, ticklabels_x = _distance_ticks(
-        focus_extent[:2], center_lon, 111.32 * np.cos(np.deg2rad(center_lat))
+    panel_position = ax0.get_position()
+    panel_aspect = (
+        panel_position.height * fig.get_figheight()
+        / (panel_position.width * fig.get_figwidth())
     )
+    map_extent = _map_extent(center_lon, center_lat, panel_aspect)
+    ax0.set_extent(map_extent, crs=ccrs.PlateCarree())
+    east_west_ticks = np.arange(-400, 401, 200)
+    ticklocationx = center_lon + east_west_ticks / (
+        111.32 * np.cos(np.deg2rad(center_lat))
+    )
+    ticklabels_x = [str(value) for value in east_west_ticks]
     ticklocationy, ticklabels_y = _distance_ticks(
-        focus_extent[2:], center_lat, 111.32
+        map_extent[2:], center_lat, 111.32
     )
     ax0.set_xticks(ticklocationx)
     ax0.set_yticks(ticklocationy)

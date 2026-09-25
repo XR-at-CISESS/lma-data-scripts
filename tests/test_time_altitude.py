@@ -8,7 +8,7 @@ import tables
 from netCDF4 import Dataset
 
 from lma_scripts.lma_flash import add_time_altitude_counts
-from lma_scripts.lma_plot import _axis_extent, create_parser, get_data
+from lma_scripts.lma_plot import _map_extent, create_parser, get_data
 
 
 class TimeAltitudeTests(unittest.TestCase):
@@ -74,15 +74,14 @@ class TimeAltitudeTests(unittest.TestCase):
         self.assertFalse(parser.parse_args(["in", "out"]).time_altitude)
         self.assertTrue(parser.parse_args(["in", "out", "--time-altitude"]).time_altitude)
 
-    def test_focus_extent_ignores_sparse_outliers(self):
-        coordinates = np.linspace(-80, -72, 801)
-        weights = np.zeros(801)
-        weights[200] = 1
-        weights[300:500] = 10
-        weights[700] = 1
-        low, high = _axis_extent(coordinates, weights, 1.8)
-        self.assertGreater(low, -78)
-        self.assertLess(high, -74)
+    def test_map_extent_uses_fixed_east_west_range_and_panel_aspect(self):
+        center_lon, center_lat, aspect = -76.3, 38.5, 0.75
+        west, east, south, north = _map_extent(center_lon, center_lat, aspect)
+        km_per_lon = 111.32 * np.cos(np.deg2rad(center_lat))
+        self.assertAlmostEqual((west - center_lon) * km_per_lon, -400)
+        self.assertAlmostEqual((east - center_lon) * km_per_lon, 400)
+        self.assertAlmostEqual((south - center_lat) * 111.32, -300)
+        self.assertAlmostEqual((north - center_lat) * 111.32, 300)
 
     def test_populated_grid_rejects_empty_time_altitude_counts(self):
         with tempfile.TemporaryDirectory() as directory:
