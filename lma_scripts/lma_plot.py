@@ -35,6 +35,13 @@ LOG = logging.getLogger("lma_scripts.plot")
 GeoAxes._pcolormesh_patched = Axes.pcolormesh
 
 
+def _plot_filename(file, outpath, image_type):
+    return os.path.join(
+        outpath,
+        f"{os.path.splitext(os.path.basename(file))[0]}.{image_type}",
+    )
+
+
 def draw_map(
     ax,
     network="DCLMA",
@@ -680,10 +687,7 @@ def make_plot(
     # ===============================================================
     # ----------------------- Save file ------------------------------
     LOG.debug("Saving plot")
-    filepathway = file.split("/")
-    filename = filepathway[-1].split(".")
-    filename = "".join(filename[:-1])
-    filename = os.path.join(outpath, "".join([filename, ".", image_type]))
+    filename = _plot_filename(file, outpath, image_type)
     if do_save:
         plt.savefig(
             filename,

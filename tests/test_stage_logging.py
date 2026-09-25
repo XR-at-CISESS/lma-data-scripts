@@ -133,6 +133,13 @@ class StageLoggingTests(unittest.TestCase):
         self.assertIn("Finished image 1/1 in", output)
         make_plot.assert_called_once()
 
+    def test_plot_filename_preserves_resolution_decimal(self):
+        input_file = "/data/MALMA_20220804_230000_600_10src_0.0115deg-dx_source_3d.nc"
+        self.assertEqual(
+            lma_plot._plot_filename(input_file, "/plots", "png"),
+            "/plots/MALMA_20220804_230000_600_10src_0.0115deg-dx_source_3d.png",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
