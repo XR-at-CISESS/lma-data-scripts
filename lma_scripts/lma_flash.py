@@ -32,7 +32,7 @@ from lma_scripts.log_output import (
     readable_library_output,
 )
 from lma_scripts.grid_coordinates import scalar_grid_coordinates
-from lma_scripts.time_altitude import compute_time_altitude_counts
+from lma_scripts.time_altitude import altitude_bin_centers, compute_time_altitude_counts
 
 from lmatools.grid.make_grids import (
     grid_h5flashfiles,
@@ -52,20 +52,30 @@ LOG = logging.getLogger("lma_scripts.grid")
 def add_time_altitude_counts(grid_path, flash_path, start_time, frame_interval, min_points):
     """Store one-second source counts by altitude in the 3D grid product."""
     with Dataset(grid_path, "r+") as grid:
-        altitudes = grid.variables["altitude"][:]
-        if len(altitudes) < 2:
+        grid_altitudes = grid.variables["altitude"][:]
+        if len(grid_altitudes) < 2:
             return
+        altitudes = altitude_bin_centers(grid_altitudes)
         counts = compute_time_altitude_counts(
             altitudes, flash_path, start_time, frame_interval, min_points
         )
         seconds = counts.shape[0]
         if "time_altitude_second" not in grid.dimensions:
             grid.createDimension("time_altitude_second", seconds)
+        if "time_altitude_altitude" not in grid.dimensions:
+            grid.createDimension("time_altitude_altitude", len(altitudes))
+        altitude_variable = grid.variables.get("time_altitude_altitude")
+        if altitude_variable is None:
+            altitude_variable = grid.createVariable(
+                "time_altitude_altitude", "f4", ("time_altitude_altitude",)
+            )
+        altitude_variable.units = "m"
+        altitude_variable[:] = altitudes
         variable = grid.variables.get("time_altitude_count")
         if variable is None:
             variable = grid.createVariable(
                 "time_altitude_count", "i4",
-                ("time_altitude_second", grid.variables["altitude"].dimensions[0]),
+                ("time_altitude_second", "time_altitude_altitude"),
                 zlib=True,
             )
         variable.long_name = "Retained source count by second and altitude"

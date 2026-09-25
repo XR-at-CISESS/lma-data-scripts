@@ -14,12 +14,27 @@ from lma_scripts.lma_plot import _axis_extent, create_parser, get_data
 class TimeAltitudeTests(unittest.TestCase):
     def test_counts_include_only_retained_flashes_in_frame_and_altitude(self):
         with tempfile.TemporaryDirectory() as directory:
-            grid_path = os.path.join(directory, "grid.nc")
+            grid_path = os.path.join(
+                directory, "DCLMA_20240804_210000_2_10src_source_3d.nc"
+            )
             flash_path = os.path.join(directory, "flashes.h5")
             with Dataset(grid_path, "w") as grid:
+                grid.createDimension("ntimes", 1)
+                grid.createDimension("lon", 3)
+                grid.createDimension("lat", 3)
                 grid.createDimension("alt", 3)
                 altitude = grid.createVariable("altitude", "f4", ("alt",))
                 altitude[:] = [500, 1500, 2500]
+                grid.createVariable("longitude", "f4", ("lon",))[:] = [-77, -76, -75]
+                grid.createVariable("latitude", "f4", ("lat",))[:] = [38, 39, 40]
+                time = grid.createVariable("time", "f4", ("ntimes",))
+                time.units = "seconds since 2024-08-04 00:00:00"
+                time[:] = [75600]
+                source = grid.createVariable(
+                    "lma_source", "i4", ("ntimes", "lon", "lat", "alt")
+                )
+                source.units = "sources"
+                source[0, :, :, :] = 1
             event_dtype = np.dtype([
                 ("time", "f8"), ("alt", "f4"), ("flash_id", "i4")
             ])
@@ -44,7 +59,15 @@ class TimeAltitudeTests(unittest.TestCase):
             )
             with Dataset(grid_path) as grid:
                 counts = grid.variables["time_altitude_count"][:]
-                np.testing.assert_array_equal(counts, [[1, 1, 0], [0, 0, 1]])
+                self.assertEqual(counts.shape, (2, 15))
+                self.assertEqual(int(counts.sum()), 3)
+                self.assertEqual(int(counts[0, 2]), 1)
+                self.assertEqual(int(counts[0, 7]), 1)
+                self.assertEqual(int(counts[1, 12]), 1)
+                self.assertEqual(grid.variables["time_altitude_altitude"].units, "m")
+            data = get_data(grid_path, time_altitude=True)
+            self.assertEqual(data["time_altitude_count"].shape, (2, 15))
+            self.assertEqual(int(data["time_altitude_count"].sum()), 3)
 
     def test_cli_opt_in(self):
         parser = create_parser()
@@ -94,6 +117,7 @@ class TimeAltitudeTests(unittest.TestCase):
                 flash_table.append(np.array([(1, 10)], dtype=flash_table.dtype))
             data = get_data(path, time_altitude=True)
             self.assertEqual(int(data["time_altitude_count"].sum()), 1)
+            self.assertEqual(len(data["time_altitude_alts"]), 15)
 
 
 if __name__ == "__main__":

@@ -6,6 +6,16 @@ import numpy as np
 import tables
 
 
+def altitude_bin_centers(grid_altitudes, step_meters=200):
+    """Subdivide the gridded altitude range for a readable source scatterplot."""
+    grid_altitudes = np.asarray(grid_altitudes, dtype=float)
+    if len(grid_altitudes) < 2:
+        return grid_altitudes
+    lower = grid_altitudes[0] - (grid_altitudes[1] - grid_altitudes[0]) / 2
+    upper = grid_altitudes[-1] + (grid_altitudes[-1] - grid_altitudes[-2]) / 2
+    return np.arange(lower + step_meters / 2, upper, step_meters)
+
+
 def compute_time_altitude_counts(altitudes, flash_path, start_time, frame_interval, min_points):
     """Count retained sources in numeric NetCDF altitude bins and one-second bins.
 

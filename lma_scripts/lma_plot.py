@@ -32,7 +32,7 @@ from lma_data.browser.file_browser import FileBrowser
 from lma_data.lmatools_file import LMAToolsFile
 from lma_data.LMA_filters import LMAFilters
 from lma_scripts.log_output import configure_stage_logging
-from lma_scripts.time_altitude import compute_time_altitude_counts
+from lma_scripts.time_altitude import altitude_bin_centers, compute_time_altitude_counts
 
 LOG = logging.getLogger("lma_scripts.plot")
 
@@ -165,8 +165,13 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
     alts = data["altitude"][:]
     full_alts = alts
     time_altitude_count = None
+    time_altitude_alts = None
     if time_altitude and "time_altitude_count" in data:
-        time_altitude_count = data["time_altitude_count"][:, alt_index[0] : alt_index[1]]
+        time_altitude_count = data["time_altitude_count"][:]
+        time_altitude_alts = (
+            data["time_altitude_altitude"][:]
+            if "time_altitude_altitude" in data else full_alts
+        )
 
     # ------------ Index Data in Region of Interest ------------
     if len(alt_index) > 0:
@@ -209,20 +214,36 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
         minimum_points = re.search(r"_(\d+)src_", fname)
         if len(matching_flash_files) == 1 and minimum_points:
             LOG.info("Computing time-altitude counts from companion %s", matching_flash_files[0])
+            time_altitude_alts = altitude_bin_centers(full_alts)
             time_altitude_count = compute_time_altitude_counts(
-                full_alts,
+                time_altitude_alts,
                 matching_flash_files[0],
                 start_time,
                 frame_interval,
                 int(minimum_points.group(1)),
-            )[:, alt_index[0] : alt_index[1]]
+            )
         elif total > 0:
             raise ValueError(
                 f"{file} has no usable time-altitude counts or unique companion "
                 "flash HDF5 file; regenerate its grid with the corrected lma_flash"
             )
         else:
-            time_altitude_count = np.zeros((frame_interval, len(alts)), dtype=int)
+            time_altitude_alts = altitude_bin_centers(full_alts)
+            time_altitude_count = np.zeros(
+                (frame_interval, len(time_altitude_alts)), dtype=int
+            )
+    if time_altitude:
+        lower_altitude = alts[0] - (
+            full_alts[min(len(full_alts) - 1, alt_index[0] + 1)] - alts[0]
+        ) / 2
+        upper_altitude = alts[-1] + (
+            alts[-1] - full_alts[max(0, min(alt_index[1], len(full_alts)) - 2)]
+        ) / 2
+        selected_altitudes = (time_altitude_alts >= lower_altitude) & (
+            time_altitude_alts <= upper_altitude
+        )
+        time_altitude_alts = time_altitude_alts[selected_altitudes]
+        time_altitude_count = time_altitude_count[:, selected_altitudes]
 
     # ---------- Create lat/lon mesh -------------
     mesh_lon, mesh_lat = np.meshgrid(lons, lats)
@@ -263,6 +284,7 @@ def get_data(file, lon_index=(0, 800), lat_index=(0, 800), alt_index=(0, 20), ti
         start_time=start_time,
         frame_interval=frame_interval,
         time_altitude_count=time_altitude_count,
+        time_altitude_alts=time_altitude_alts,
         focus_extent=focus_extent,
         grid_center_lon=grid_center_lon,
         grid_center_lat=grid_center_lat,
@@ -366,7 +388,7 @@ def make_plot(
     FA = 1.2 if time_altitude else 0
     F0 = 4.5  # main panel is F0 times the size of the cross section panel
     F1 = 0.25  # cbar panel is F1 times the size of the cross section panel
-    F2 = 0.6  # Gap above cbar is F2 times the size of the cross section panel
+    F2 = 0.05 if time_altitude else 0.6  # gap above the colorbar
 
     fwin = 6  # figure width in inches
     dpi = 300
@@ -552,14 +574,21 @@ def make_plot(
             data["start_time"] + timedelta(seconds=int(second) + 0.5)
             for second in seconds
         ]
+        positive_counts = counts[counts > 0]
+        count_norm = colors.LogNorm(
+            vmin=1,
+            vmax=max(2, float(np.quantile(positive_counts, 0.995)))
+            if len(positive_counts) else 2,
+            clip=True,
+        )
         time_scatter = altitude_time_ax.scatter(
             timestamps,
-            data["alts"][altitude_bins] / 1e3,
+            data["time_altitude_alts"][altitude_bins] / 1e3,
             c=counts[seconds, altitude_bins],
-            s=3,
+            s=0.25,
             marker="s",
             cmap=cmap,
-            norm=norm,
+            norm=count_norm,
             linewidths=0,
         )
         altitude_time_ax.set_xlim(
@@ -580,7 +609,15 @@ def make_plot(
             time_scatter, ax=altitude_time_ax, orientation="vertical",
             pad=0.01, fraction=0.025,
         )
-        time_colorbar.set_label("Sources / second / altitude bin", color=textrgba)
+        altitude_bin_meters = (
+            int(np.median(np.diff(data["time_altitude_alts"])))
+            if len(data["time_altitude_alts"]) > 1 else 1000
+        )
+        time_colorbar.set_label(
+            f"Sources / s / {altitude_bin_meters} m altitude", color=textrgba
+        )
+        top_ticks = [value for value in (1, 5, 20, 50, 100, 200) if value <= count_norm.vmax]
+        time_colorbar.set_ticks(top_ticks, labels=[str(value) for value in top_ticks])
         time_colorbar.ax.tick_params(labelsize=7, labelcolor=textrgba)
         altitude_time_ax.grid(color=gridrgba, linewidth=1)
         altitude_time_ax.tick_params(labelsize=8, labelcolor=textrgba, color=edgergba)
