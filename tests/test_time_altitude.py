@@ -78,10 +78,10 @@ class TimeAltitudeTests(unittest.TestCase):
         center_lon, center_lat, aspect = -76.3, 38.5, 0.75
         west, east, south, north = _map_extent(center_lon, center_lat, aspect)
         km_per_lon = 111.32 * np.cos(np.deg2rad(center_lat))
-        self.assertAlmostEqual((west - center_lon) * km_per_lon, -400)
-        self.assertAlmostEqual((east - center_lon) * km_per_lon, 400)
-        self.assertAlmostEqual((south - center_lat) * 111.32, -300)
-        self.assertAlmostEqual((north - center_lat) * 111.32, 300)
+        self.assertAlmostEqual((west - center_lon) * km_per_lon, -150)
+        self.assertAlmostEqual((east - center_lon) * km_per_lon, 150)
+        self.assertAlmostEqual((south - center_lat) * 111.32, -112.5)
+        self.assertAlmostEqual((north - center_lat) * 111.32, 112.5)
 
     def test_populated_grid_rejects_empty_time_altitude_counts(self):
         with tempfile.TemporaryDirectory() as directory:

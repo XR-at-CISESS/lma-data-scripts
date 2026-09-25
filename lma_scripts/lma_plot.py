@@ -35,6 +35,7 @@ from lma_scripts.log_output import configure_stage_logging
 from lma_scripts.time_altitude import altitude_bin_centers, compute_time_altitude_counts
 
 LOG = logging.getLogger("lma_scripts.plot")
+MAP_HALF_WIDTH_KM = 150  # The original MALMA view spans about 296 km east-west.
 
 GeoAxes._pcolormesh_patched = Axes.pcolormesh
 
@@ -126,13 +127,12 @@ def round_time(dt, round_to=60):
 
 
 def _map_extent(center_lon, center_lat, panel_aspect):
-    """Keep east-west distance at +/-400 km and fit north-south to the panel."""
-    half_width_km = 400
-    half_height_km = half_width_km * panel_aspect
+    """Match the original view's geographic zoom, centered on the grid origin."""
+    half_height_km = MAP_HALF_WIDTH_KM * panel_aspect
     longitude_scale = 111.32 * np.cos(np.deg2rad(center_lat))
     return (
-        center_lon - half_width_km / longitude_scale,
-        center_lon + half_width_km / longitude_scale,
+        center_lon - MAP_HALF_WIDTH_KM / longitude_scale,
+        center_lon + MAP_HALF_WIDTH_KM / longitude_scale,
         center_lat - half_height_km / 111.32,
         center_lat + half_height_km / 111.32,
     )
@@ -728,7 +728,7 @@ def make_plot(
     )
     map_extent = _map_extent(center_lon, center_lat, panel_aspect)
     ax0.set_extent(map_extent, crs=ccrs.PlateCarree())
-    east_west_ticks = np.arange(-400, 401, 200)
+    east_west_ticks = np.arange(-MAP_HALF_WIDTH_KM, MAP_HALF_WIDTH_KM + 1, 50)
     ticklocationx = center_lon + east_west_ticks / (
         111.32 * np.cos(np.deg2rad(center_lat))
     )
